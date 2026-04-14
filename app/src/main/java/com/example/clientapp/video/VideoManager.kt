@@ -11,10 +11,13 @@ class VideoManager(
 
     private var capturer: VideoCapturer? = null
     private var lastFrameTime = 0L
+    private var isFrontCamera = true
 
     fun start(context: android.content.Context, renderer: SurfaceViewRenderer) {
         val enumerator = Camera2Enumerator(context)
-        val device = enumerator.deviceNames.first()
+        val device = enumerator.deviceNames.find { enumerator.isFrontFacing(it) } ?: enumerator.deviceNames.first()
+        isFrontCamera = enumerator.isFrontFacing(device)
+        
         capturer = enumerator.createCapturer(device, null)
 
         val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
@@ -39,6 +42,17 @@ class VideoManager(
                 processFrame(frame)
             }
         }
+    }
+
+    fun switchCamera() {
+        (capturer as? CameraVideoCapturer)?.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(isFront: Boolean) {
+                isFrontCamera = isFront
+            }
+            override fun onCameraSwitchError(error: String?) {
+                // Log error
+            }
+        })
     }
 
     private fun processFrame(frame: VideoFrame) {
@@ -73,6 +87,10 @@ class VideoManager(
 
         val matrix = Matrix().apply {
             postRotate(frame.rotation.toFloat())
+            // Se for a frontal, inverte para não ficar espelhado para quem vê
+            if (isFrontCamera) {
+                postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
+            }
         }
 
         bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)

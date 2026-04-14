@@ -75,23 +75,23 @@ class MainActivity : ComponentActivity() {
 
                 MainScreen(
                     isStreaming = isStreaming,
-                    onClick = {
+                    onToggleStreaming = {
                         if (!isStreaming) {
-
                             socketManager.connect("http://192.168.15.6:3000") {
                                 socketManager.getSocket()?.let {
                                     audioManager.start(it)
                                 }
                             }
-
                             isStreaming = true
-
                         } else {
                             audioManager.stop()
                             socketManager.disconnect()
                             videoManager?.stop()
                             isStreaming = false
                         }
+                    },
+                    onSwitchCamera = {
+                        videoManager?.switchCamera()
                     }
                 ) {
                     AndroidView(
@@ -100,8 +100,10 @@ class MainActivity : ComponentActivity() {
                             SurfaceViewRenderer(context).apply {
                                 init(eglBase.eglBaseContext, null)
 
-                                videoManager = VideoManager(eglBase) {
-                                    socketManager.emitFrame(it)
+                                if (videoManager == null) {
+                                    videoManager = VideoManager(eglBase) {
+                                        socketManager.emitFrame(it)
+                                    }
                                 }
 
                                 videoManager?.start(this@MainActivity, this)

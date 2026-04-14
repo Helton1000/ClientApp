@@ -8,20 +8,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MainScreen(isStreaming: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+fun MainScreen(
+    isStreaming: Boolean,
+    onToggleStreaming: () -> Unit,
+    onSwitchCamera: () -> Unit,
+    content: @Composable () -> Unit
+) {
     Column(modifier = Modifier.fillMaxSize()) {
 
         Box(modifier = Modifier.weight(1f)) {
             content()
         }
 
-        Button(
-            onClick = onClick,
+        Row(
             modifier = Modifier
-                .padding(16.dp)
-                .align(Alignment.CenterHorizontally)
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            Text(if (isStreaming) "Stop" else "Start")
+            Button(onClick = onToggleStreaming) {
+                Text(if (isStreaming) "Parar" else "Iniciar")
+            }
+
+            if (isStreaming) {
+                Button(onClick = onSwitchCamera) {
+                    Text("Inverter Câmera")
+                }
+            }
         }
     }
 }
