@@ -29,14 +29,15 @@ class VideoManager(
             source.capturerObserver
         )
 
-        capturer?.startCapture(320, 240, 15)
+        // Reduzi para 10 FPS e resolução menor para diminuir latência na rede
+        capturer?.startCapture(320, 240, 10)
 
         val track = factory.createVideoTrack("101", source)
         track.addSink(renderer)
 
         track.addSink { frame ->
             val now = System.currentTimeMillis()
-
+            // Envia um frame a cada 100ms (10 FPS)
             if (now - lastFrameTime > 100) {
                 lastFrameTime = now
                 processFrame(frame)
@@ -45,26 +46,19 @@ class VideoManager(
     }
 
     fun switchCamera() {
-        (capturer as? CameraVideoCapturer)?.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
-            override fun onCameraSwitchDone(isFront: Boolean) {
-                isFrontCamera = isFront
-            }
-            override fun onCameraSwitchError(error: String?) {
-                // Log error
-            }
-        })
+        (capturer as? CameraVideoCapturer)?.switchCamera(null)
     }
 
     private fun processFrame(frame: VideoFrame) {
         val i420 = frame.buffer.toI420() ?: return
+        
+        // Conversão direta de YUV para NV21 (mais rápido)
         val nv21 = ByteArray(i420.width * i420.height * 3 / 2)
-
         val y = i420.dataY
         val u = i420.dataU
         val v = i420.dataV
 
         var pos = 0
-
         for (row in 0 until i420.height) {
             y.position(row * i420.strideY)
             y.get(nv21, pos, i420.width)
@@ -78,31 +72,18 @@ class VideoManager(
             }
         }
 
+        // Comprime direto para JPEG sem criar Bitmaps intermediários (Ganha muita velocidade)
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, i420.width, i420.height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, i420.width, i420.height), 30, out)
+        // Qualidade 20 é suficiente para streaming e gera pacotes pequenos
+        yuvImage.compressToJpeg(Rect(0, 0, i420.width, i420.height), 20, out)
 
-        val imageBytes = out.toByteArray()
-        var bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-
-        val matrix = Matrix().apply {
-            postRotate(frame.rotation.toFloat())
-            // Se for a frontal, inverte para não ficar espelhado para quem vê
-            if (isFrontCamera) {
-                postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
-            }
-        }
-
-        bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-
-        val finalOut = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 30, finalOut)
-
-        sendFrame(finalOut.toByteArray())
+        sendFrame(out.toByteArray())
         i420.release()
     }
 
     fun stop() {
         capturer?.stopCapture()
+        capturer?.dispose()
     }
 }

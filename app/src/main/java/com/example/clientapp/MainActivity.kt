@@ -2,48 +2,44 @@ package com.example.clientapp
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioManager as AndroidAudioManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
+import androidx.activity.compose.*
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import org.webrtc.*
-import com.example.clientapp.audio.AudioManager
-import com.example.clientapp.video.VideoManager
 import com.example.clientapp.network.SocketManager
-import com.example.clientapp.ui.mainscreen.MainScreen
+import com.example.clientapp.network.WebRTCClient
+import androidx.compose.ui.unit.dp
+import org.webrtc.*
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var eglBase: EglBase
-    private lateinit var socketManager: SocketManager
-    private lateinit var audioManager: AudioManager
-    private var videoManager: VideoManager? = null
+    private var eglBase: EglBase? = null
+    private var webRTCClient: WebRTCClient? = null
+    private var socketManager: SocketManager? = null
+    private var surfaceViewRenderer: SurfaceViewRenderer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 🔥 ESSENCIAL: inicializa WebRTC
-        PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(this)
-                .createInitializationOptions()
-        )
-
         eglBase = EglBase.create()
         socketManager = SocketManager()
-        audioManager = AudioManager(this)
+
+        // 🔊 SOM LIMPO (IMPORTANTE PARA QUALIDADE)
+        val audioManager = getSystemService(AUDIO_SERVICE) as AndroidAudioManager
+        audioManager.mode = AndroidAudioManager.MODE_IN_COMMUNICATION
+        audioManager.isSpeakerphoneOn = true
+        audioManager.isMicrophoneMute = false
 
         setContent {
-            var isStreaming by remember { mutableStateOf(false) }
 
-            // 🎯 CONTROLE DE PERMISSÃO
             var hasPermission by remember {
                 mutableStateOf(
                     ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
@@ -51,12 +47,15 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            var isConnected by remember { mutableStateOf(false) }
+            var isStreaming by remember { mutableStateOf(false) }
+
             val launcher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
-            ) {
+            ) { permissions ->
                 hasPermission =
-                    it[Manifest.permission.CAMERA] == true &&
-                            it[Manifest.permission.RECORD_AUDIO] == true
+                    permissions[Manifest.permission.CAMERA] == true &&
+                            permissions[Manifest.permission.RECORD_AUDIO] == true
             }
 
             LaunchedEffect(Unit) {
@@ -67,58 +66,63 @@ class MainActivity : ComponentActivity() {
                             Manifest.permission.RECORD_AUDIO
                         )
                     )
+                } else {
+                    socketManager?.connect("http://192.168.15.6:3000") {
+                        Log.d("ClientApp", "Socket conectado")
+                        runOnUiThread { isConnected = true }
+                    }
                 }
             }
 
-            // 🧠 UI PRINCIPAL
+            fun createWebRTCIfNeeded() {
+                if (webRTCClient == null && isConnected) {
+                    webRTCClient = WebRTCClient(
+                        this,
+                        eglBase!!,
+                        socketManager!!
+                    )
+                }
+            }
+
             if (hasPermission) {
 
-                MainScreen(
-                    isStreaming = isStreaming,
-                    onToggleStreaming = {
-                        if (!isStreaming) {
-                            socketManager.connect("http://192.168.15.6:3000") {
-                                socketManager.getSocket()?.let {
-                                    audioManager.start(it)
+                Column(Modifier.fillMaxSize()) {
+
+                    Box(Modifier.weight(1f)) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                SurfaceViewRenderer(ctx).apply {
+                                    init(eglBase!!.eglBaseContext, null)
+                                    setMirror(false)
+                                    surfaceViewRenderer = this
                                 }
                             }
-                            isStreaming = true
-                        } else {
-                            audioManager.stop()
-                            socketManager.disconnect()
-                            videoManager?.stop()
-                            isStreaming = false
-                        }
-                    },
-                    onSwitchCamera = {
-                        videoManager?.switchCamera()
+                        )
                     }
-                ) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { context ->
-                            SurfaceViewRenderer(context).apply {
-                                init(eglBase.eglBaseContext, null)
 
-                                if (videoManager == null) {
-                                    videoManager = VideoManager(eglBase) {
-                                        socketManager.emitFrame(it)
-                                    }
+                    Button(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        onClick = {
+                            if (!isStreaming) {
+                                createWebRTCIfNeeded()
+                                surfaceViewRenderer?.let {
+                                    webRTCClient?.startStreaming(it)
+                                    isStreaming = true
                                 }
-
-                                videoManager?.start(this@MainActivity, this)
+                            } else {
+                                webRTCClient?.stopStreaming()
+                                isStreaming = false
                             }
                         }
-                    )
+                    ) {
+                        Text(if (isStreaming) "Parar" else "Iniciar")
+                    }
                 }
 
             } else {
-                // 🔒 Tela sem permissão
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Permissão de câmera e áudio necessária")
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Permissões necessárias")
                 }
             }
         }
@@ -126,10 +130,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-
-        audioManager.stop()
-        socketManager.disconnect()
-        videoManager?.stop()
-        eglBase.release()
+        webRTCClient?.stopStreaming()
+        socketManager?.disconnect()
+        eglBase?.release()
     }
 }
